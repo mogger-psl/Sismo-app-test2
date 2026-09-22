@@ -1,8 +1,9 @@
-name: Build Android ZIP
+name: Build Android APK
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
   pull_request:
   workflow_dispatch:
 
@@ -13,110 +14,134 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    env:
-      JAVA_VERSION: "17"
-      ANDROID_API: "32"
-      BUILD_TOOLS_VERSION: "32.0.0"
-      COMPAT_SDK: "35"
-      COMPAT_BUILD_TOOLS: "35.0.0"
-
     steps:
-      - name: Checkout repository
+      - name: Descargar repositorio
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Instalar Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
-          cache: gradle
+          java-version: "17"
 
-      - name: Setup Android SDK
+      - name: Instalar Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDKs
+      - name: Instalar plataformas Android
         shell: bash
         run: |
-          set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          set -euxo pipefail
+
+          yes | sdkmanager --licenses || true
+
           sdkmanager --install \
             "platform-tools" \
-            "platforms;android-${ANDROID_API}" \
+            "platforms;android-32" \
             "platforms;android-35" \
-            "build-tools;${BUILD_TOOLS_VERSION}" \
-            "build-tools;${COMPAT_BUILD_TOOLS}"
+            "build-tools;32.0.0" \
+            "build-tools;35.0.0"
 
-      - name: Extract project from ZIP
+      - name: Descomprimir proyecto
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
 
-          if [ ! -f "SismoOffline.zip" ]; then
-            echo "No existe SismoOffline.zip en la raíz del repo."
-            ls -la
-            exit 1
-          fi
+          test -f SismoOffline.zip
 
-          mkdir -p extracted
-          unzip -q SismoOffline.zip -d extracted
+          rm -rf android-project
+          mkdir -p android-project
+
+          unzip -o SismoOffline.zip -d android-project
+
+          echo "Contenido del ZIP:"
+          find android-project -maxdepth 5 -type f | sort
+
+      - name: Detectar proyecto Gradle
+        shell: bash
+        run: |
+          set -euxo pipefail
 
           PROJECT_DIR=""
-          while IFS= read -r found; do
-            PROJECT_DIR="$(dirname "$found")"
-            break
-          done < <(find extracted -type f -name gradlew -print)
+
+          if find android-project -type f -name gradlew | grep -q .; then
+            PROJECT_DIR="$(dirname "$(find android-project -type f -name gradlew | head -n 1)")"
+          elif find android-project -type f -name build.gradle | grep -q .; then
+            PROJECT_DIR="$(dirname "$(find android-project -type f -name build.gradle | head -n 1)")"
+          elif find android-project -type f -name build.gradle.kts | grep -q .; then
+            PROJECT_DIR="$(dirname "$(find android-project -type f -name build.gradle.kts | head -n 1)")"
+          fi
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "No se encontró un proyecto Android dentro del ZIP."
-            find extracted -maxdepth 4 -type f | head -200
+            echo "ERROR: No se encontró un proyecto Android dentro del ZIP."
+            echo "El ZIP debe contener build.gradle, build.gradle.kts o gradlew."
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Proyecto Android encontrado en: $PROJECT_DIR"
+          echo "Proyecto encontrado en: $PROJECT_DIR"
 
-      - name: Prepare Android project for SDK compatibility
+      - name: Preparar proyecto
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
 
           cd "$PROJECT_DIR"
+
+          printf 'sdk.dir=%s\n' "$ANDROID_SDK_ROOT" > local.properties
 
           if [ -f gradlew ]; then
             chmod +x gradlew
           fi
 
-          if [ -f local.properties ]; then
-            rm -f local.properties
-          fi
-
-          printf 'sdk.dir=%s\n' "$ANDROID_SDK_ROOT" > local.properties
-
-          # Ajuste defensivo para proyectos antiguos que usan SDK 32 o similares
-          while IFS= read -r file; do
-            sed -i -E \
-              -e 's/(compileSdkVersion[[:space:]]+)[0-9]+/compileSdkVersion 35/g' \
-              -e 's/(compileSdk[[:space:]]*=[[:space:]]*)[0-9]+/compileSdk = 35/g' \
-              -e 's/(targetSdkVersion[[:space:]]+)[0-9]+/targetSdkVersion 35/g' \
-              -e 's/(targetSdk[[:space:]]*=[[:space:]]*)[0-9]+/targetSdk = 35/g' \
-              "$file"
-          done < <(find . -type f \( -name '*.gradle' -o -name '*.gradle.kts' \) -print)
-
-          echo "Contenido relevante del proyecto:"
-          find . -maxdepth 2 -type f \( -name 'build.gradle' -o -name 'build.gradle.kts' -o -name 'settings.gradle' -o -name 'settings.gradle.kts' \) -print
-
-      - name: Build debug APK
+      - name: Instalar Gradle si el ZIP no incluye gradlew
+        if: ${{ success() }}
         shell: bash
         run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
-          ./gradlew --no-daemon --stacktrace clean assembleDebug
+          set -euxo pipefail
 
-      - name: Upload artifact
+          if [ ! -f "$PROJECT_DIR/gradlew" ]; then
+            GRADLE_VERSION="8.7"
+
+            wget -q \
+              "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" \
+              -O /tmp/gradle.zip
+
+            sudo unzip -q /tmp/gradle.zip -d /opt
+            echo "/opt/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
+
+            echo "El ZIP no contiene gradlew; se usará Gradle ${GRADLE_VERSION}."
+          fi
+
+      - name: Compilar APK debug
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$PROJECT_DIR"
+
+          if [ -f ./gradlew ]; then
+            ./gradlew --no-daemon --stacktrace assembleDebug
+          else
+            gradle --no-daemon --stacktrace assembleDebug
+          fi
+
+      - name: Buscar APK generado
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "APKs encontrados:"
+          find "$PROJECT_DIR" -type f -name "*.apk" -print
+
+          if ! find "$PROJECT_DIR" -type f -name "*.apk" | grep -q .; then
+            echo "ERROR: La compilación terminó sin generar ningún APK."
+            exit 1
+          fi
+
+      - name: Subir APK
         uses: actions/upload-artifact@v4
         with:
           name: sismo-debug-apk
           path: |
             ${{ env.PROJECT_DIR }}/**/build/outputs/apk/**/*.apk
-            ${{ env.PROJECT_DIR }}/**/build/outputs/apk/**/*.aab
           if-no-files-found: error
