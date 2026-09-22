@@ -105,7 +105,7 @@ jobs:
           set -euxo pipefail
 
           if [ ! -f "$PROJECT_DIR/gradlew" ]; then
-            GRADLE_VERSION="9.6.0"
+            GRADLE_VERSION="8.7.0"
             GRADLE_URL="https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
 
             curl --fail --show-error --location \
