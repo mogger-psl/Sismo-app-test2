@@ -65,17 +65,21 @@ jobs:
 
           PROJECT_DIR=""
 
-          if find android-project -type f -name gradlew | grep -q .; then
-            PROJECT_DIR="$(dirname "$(find android-project -type f -name gradlew | head -n 1)")"
-          elif find android-project -type f -name build.gradle | grep -q .; then
-            PROJECT_DIR="$(dirname "$(find android-project -type f -name build.gradle | head -n 1)")"
-          elif find android-project -type f -name build.gradle.kts | grep -q .; then
-            PROJECT_DIR="$(dirname "$(find android-project -type f -name build.gradle.kts | head -n 1)")"
+          if find android-project -type f -name gradlew -print -quit | grep -q .; then
+            PROJECT_DIR="$(dirname "$(find android-project -type f -name gradlew -print -quit)")"
+          elif find android-project -type f -name settings.gradle.kts -print -quit | grep -q .; then
+            PROJECT_DIR="$(dirname "$(find android-project -type f -name settings.gradle.kts -print -quit)")"
+          elif find android-project -type f -name settings.gradle -print -quit | grep -q .; then
+            PROJECT_DIR="$(dirname "$(find android-project -type f -name settings.gradle -print -quit)")"
+          elif find android-project -type f -name build.gradle.kts -print -quit | grep -q .; then
+            PROJECT_DIR="$(dirname "$(find android-project -type f -name build.gradle.kts -print -quit)")"
+          elif find android-project -type f -name build.gradle -print -quit | grep -q .; then
+            PROJECT_DIR="$(dirname "$(find android-project -type f -name build.gradle -print -quit)")"
           fi
 
           if [ -z "$PROJECT_DIR" ]; then
             echo "ERROR: No se encontró un proyecto Android dentro del ZIP."
-            echo "El ZIP debe contener build.gradle, build.gradle.kts o gradlew."
+            echo "El ZIP debe contener build.gradle, build.gradle.kts, settings.gradle, settings.gradle.kts o gradlew."
             exit 1
           fi
 
@@ -96,17 +100,17 @@ jobs:
           fi
 
       - name: Instalar Gradle si el ZIP no incluye gradlew
-        if: ${{ success() }}
         shell: bash
         run: |
           set -euxo pipefail
 
           if [ ! -f "$PROJECT_DIR/gradlew" ]; then
-            GRADLE_VERSION="9.2"
+            GRADLE_VERSION="8.10.2"
+            GRADLE_URL="https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
 
-            wget -q \
-              "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" \
-              -O /tmp/gradle.zip
+            curl --fail --show-error --location \
+              "$GRADLE_URL" \
+              --output /tmp/gradle.zip
 
             sudo unzip -q /tmp/gradle.zip -d /opt
             echo "/opt/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
