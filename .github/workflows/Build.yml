@@ -1,10 +1,12 @@
-name: Build Android APK
+name: Compilar APK Android
 
 on:
   push:
     branches:
       - main
   pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -12,142 +14,60 @@ permissions:
 
 jobs:
   build:
+    name: Build debug APK
     runs-on: ubuntu-latest
 
     steps:
       - name: Descargar repositorio
         uses: actions/checkout@v4
 
-      - name: Instalar Java 17
+      - name: Configurar Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
 
-      - name: Instalar Android SDK
+      - name: Configurar Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          packages: platform-tools
 
-      - name: Instalar plataformas Android
+      - name: Instalar componentes Android requeridos
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses || true
+          yes | sdkmanager --licenses >/dev/null || true
 
-          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --install \
+          sdkmanager \
             "platform-tools" \
-            "platforms;android-32" \
-            "platforms;android-35" \
-            "build-tools;32.0.0" \
-            "build-tools;35.0.0"
+            "platforms;android-33" \
+            "build-tools;33.0.2"
 
-      - name: Descomprimir proyecto
+      - name: Instalar Gradle
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          test -f SismoOffline.zip
+          curl --fail --silent --show-error --location \
+            "https://services.gradle.org/distributions/gradle-8.2.1-bin.zip" \
+            --output /tmp/gradle.zip
 
-          rm -rf android-project
-          mkdir -p android-project
+          sudo unzip -q /tmp/gradle.zip -d /opt
+          echo "/opt/gradle-8.2.1/bin" >> "$GITHUB_PATH"
 
-          unzip -o SismoOffline.zip -d android-project
-
-          echo "Contenido del ZIP:"
-          find android-project -maxdepth 5 -type f | sort
-
-      - name: Detectar proyecto Gradle
+      - name: Configurar ruta del Android SDK
         shell: bash
         run: |
-          set -euxo pipefail
+          printf "sdk.dir=%s\n" "$ANDROID_SDK_ROOT" > local.properties
 
-          PROJECT_DIR=""
-
-          if find android-project -type f -name gradlew -print -quit | grep -q .; then
-            PROJECT_DIR="$(dirname "$(find android-project -type f -name gradlew -print -quit)")"
-          elif find android-project -type f -name settings.gradle.kts -print -quit | grep -q .; then
-            PROJECT_DIR="$(dirname "$(find android-project -type f -name settings.gradle.kts -print -quit)")"
-          elif find android-project -type f -name settings.gradle -print -quit | grep -q .; then
-            PROJECT_DIR="$(dirname "$(find android-project -type f -name settings.gradle -print -quit)")"
-          elif find android-project -type f -name build.gradle.kts -print -quit | grep -q .; then
-            PROJECT_DIR="$(dirname "$(find android-project -type f -name build.gradle.kts -print -quit)")"
-          elif find android-project -type f -name build.gradle -print -quit | grep -q .; then
-            PROJECT_DIR="$(dirname "$(find android-project -type f -name build.gradle -print -quit)")"
-          fi
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: No se encontró un proyecto Android dentro del ZIP."
-            echo "El ZIP debe contener build.gradle, build.gradle.kts, settings.gradle, settings.gradle.kts o gradlew."
-            exit 1
-          fi
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Proyecto encontrado en: $PROJECT_DIR"
-
-      - name: Preparar proyecto
+      - name: Compilar aplicación y ejecutar tests
         shell: bash
         run: |
-          set -euxo pipefail
+          gradle --no-daemon --stacktrace test assembleDebug
 
-          cd "$PROJECT_DIR"
-
-          printf 'sdk.dir=%s\n' "$ANDROID_SDK_ROOT" > local.properties
-
-          if [ -f gradlew ]; then
-            chmod +x gradlew
-          fi
-
-      - name: Instalar Gradle si el ZIP no incluye gradlew
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          if [ ! -f "$PROJECT_DIR/gradlew" ]; then
-            GRADLE_VERSION="8.7"
-            GRADLE_URL="https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
-
-            curl --fail --show-error --location \
-              "$GRADLE_URL" \
-              --output /tmp/gradle.zip
-
-            sudo unzip -q /tmp/gradle.zip -d /opt
-            echo "/opt/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
-
-            echo "El ZIP no contiene gradlew; se usará Gradle ${GRADLE_VERSION}."
-          fi
-
-      - name: Compilar APK debug
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          cd "$PROJECT_DIR"
-
-          if [ -f ./gradlew ]; then
-            ./gradlew --no-daemon --stacktrace assembleDebug
-          else
-            gradle --no-daemon --stacktrace assembleDebug
-          fi
-
-      - name: Buscar APK generado
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          echo "APKs encontrados:"
-          find "$PROJECT_DIR" -type f -name "*.apk" -print
-
-          if ! find "$PROJECT_DIR" -type f -name "*.apk" | grep -q .; then
-            echo "ERROR: La compilación terminó sin generar ningún APK."
-            exit 1
-          fi
-
-      - name: Subir APK
+      - name: Publicar APK debug
         uses: actions/upload-artifact@v4
         with:
-          name: sismo-debug-apk
-          path: |
-            ${{ env.PROJECT_DIR }}/**/build/outputs/apk/**/*.apk
+          name: sismo-offline-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
