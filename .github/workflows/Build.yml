@@ -31,13 +31,6 @@ jobs:
       - name: Configurar Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Instalar componentes Android requeridos
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          yes | sdkmanager --licenses >/dev/null || true
-
           sdkmanager \
             "platform-tools" \
             "platforms;android-33" \
